@@ -11,7 +11,7 @@
 //! Maze traversal program
 //!
 
-#include <chrono>
+#include <chrono> 
 #include <stdio.h>
 #include <stdlib.h>
 #include <curses.h>
@@ -73,16 +73,12 @@ struct Maze {
   u8 rows; 
   u8 cols;
   u16 start_index;
-
-  MazeCell* cells; 
+  MazeCell* data; 
 };
 
-/// (row, col) deltas for N,S,E,W
-const i8 cardinal_dir_deltas[][2] = {
-  {-1,  0}, // N
-  { 1,  0}, // S
-  { 0,  1}, // E
-  { 0, -1}  // W
+struct AdjCellCoords {
+  Coords coords[4];
+  u8 count;  
 };
 
 inline MazeCellType mazeCellTypeFromChar(const MazeCellChar c) {
@@ -114,12 +110,42 @@ inline bool validMazeCoords(Maze* m, i8 row, i8 col) {
 
 inline MazeCell* mazeCellFromCoords(Maze* m, u8 row, u8 col) {
   const u16 cell_index = (u16)row * m->cols + col; 
-  return (m->cells + cell_index);
+  return (m->data + cell_index);
+}
+
+inline MazeCell* mazeCellFromCoords(Maze* m, Coords coords) {
+  return mazeCellFromCoords(m, coords.row, coords.col);
+}
+
+AdjCellCoords mazeAdjCellCoords(Maze* m, Coords pos) {
+  AdjCellCoords result;
+  result.count = 0;
+
+  // (row, col) deltas for N,S,E,W
+  const i8 dir_deltas[][2] = {
+    {-1,  0}, // N
+    { 1,  0}, // S
+    { 0,  1}, // E
+    { 0, -1}  // W
+  };
+
+  for (u8 dir_delta_index=0; dir_delta_index < 4; ++dir_delta_index) {
+    const i8 d_row = dir_deltas[dir_delta_index][0];
+    const i8 d_col = dir_deltas[dir_delta_index][1];
+    if (validMazeCoords(m, (i8)pos.row + d_row, 
+        (i8)pos.col + d_col)) {
+      result.coords[result.count++] = Coords{
+        .row = (u8)(pos.row + d_row), 
+        .col = (u8)(pos.col + d_col)
+      };
+    }
+  }
+  
+  return result;
 }
 
 Maze mazeFromStringU8(Arena* arena, StringU8 maze_str) {
   Maze result;
-  u8 maze_validity = 0;
 
   u8 dims_written = 0;
   u16 maze_cell_index = 0;
@@ -135,9 +161,8 @@ Maze mazeFromStringU8(Arena* arena, StringU8 maze_str) {
       case MazeCellChar_goal: {
         const u8 row = maze_cell_index / result.cols; 
         const u8 col = maze_cell_index % result.cols;
-        const MazeCellType cell_type = mazeCellTypeFromChar(c);
-        result.cells[(u16)row * result.cols + col].type = cell_type;
-        maze_validity |= (1 << cell_type);
+        result.data[(u16)row * result.cols + col].type =
+           mazeCellTypeFromChar(c);
 
         if (c == MazeCellChar_start) 
           result.start_index = maze_cell_index;
@@ -168,36 +193,24 @@ Maze mazeFromStringU8(Arena* arena, StringU8 maze_str) {
 
           dim = atoi((char*)dim_z.str);
 
-          arenaEnd(arena, arena_state); 
+          arenaEnd(arena, arena_state); // End dim_z scratch
         }
 
-        // Write row or col dim. If we have both dims allocate cells.
+        // Write row or col and if we have both dims allocate 
+        // space for cells.
         if (dims_written == 0) {
           result.rows = (u8)dim;
         } else if (dims_written == 1) {
           result.cols = (u8)dim;
-          result.cells = 
+          result.data = 
             arenaAlloc(arena, MazeCell, result.rows * result.cols);
-          for (u16 cell_index=0; 
-               cell_index < result.rows * result.cols; 
-               ++cell_index)
-            result.cells[cell_index] = MazeCell{ 
-              .queued = 0, 
-              .visited = 0, 
-              .distance = 0, 
-              .type = 0
-            };
         } else 
           InvalidPath; 
         dims_written++;
       } break;
     }
   }
-
-  // Assert valid maze
-  if (!(maze_validity & (1 << MazeCellType_goal))) InvalidPath;
-  if (!(maze_validity & (1 << MazeCellType_start))) InvalidPath;
-
+  
   return result;
 }
 
@@ -208,49 +221,38 @@ void mazeUpdateCellDistancesToTarget(
 ) {
   ArenaState scratch_restore = arenaBegin(scratch);
 
-  // Reset cell distances
   for (u16 cell_index=0; cell_index < m->rows * m->cols; ++cell_index)
-    m->cells[cell_index].distance = 0;
+    m->data[cell_index].distance = 0;
 
   QueueMazeSWE swe_queue = queueMazeSWEInit();
   queueMazeSWEEnqueue(&swe_queue, scratch, 
     MazeSWE{.distance = 0, .coords = target});
   while (swe_queue.head != 0) {
     MazeSWE swe = queueMazeSWEDequeue(&swe_queue);
-    for (u8 dir_delta_index=0; 
-         dir_delta_index < 4; 
-         ++dir_delta_index) 
-    {
-      const i8 d_row = cardinal_dir_deltas[dir_delta_index][0];
-      const i8 d_col = cardinal_dir_deltas[dir_delta_index][1];
-      if (validMazeCoords(m, (i8)swe.coords.row + d_row, 
-        (i8)swe.coords.col + d_col)) {
-        Coords pos_to_queue = Coords{
-          .row = (u8)(swe.coords.row + d_row), 
-          .col = (u8)(swe.coords.col + d_col)
-        };
-        MazeCell* cell = mazeCellFromCoords(m, pos_to_queue.row, 
-          pos_to_queue.col); 
 
-        // Only queue if the distance still needs to be calculated.
-        // Target has a distance of 0 so ignore it.
-        if ((cell->distance == 0) && 
-            ((pos_to_queue.row != target.row) || 
-             (pos_to_queue.col != target.col))) 
-        {
-          // Set wall distance to the largest representable value. 
-          // Otherwise update distance now and queue up the next sample
-          // walk entry.
-          if (cell->type == MazeCellType_wall) {   
-            cell->distance = (1 << 12) - 1; 
-          } else {
-            cell->distance = swe.distance + 1;
+    AdjCellCoords adj_cell_coords = mazeAdjCellCoords(m, swe.coords);
+    for (u8 adj_index=0; adj_index < adj_cell_coords.count; 
+         ++adj_index) {
+      MazeCell* cell = mazeCellFromCoords(m, 
+        adj_cell_coords.coords[adj_index]); 
 
-            MazeSWE new_swe;  
-            new_swe.distance = swe.distance + 1;
-            new_swe.coords = pos_to_queue;
-            queueMazeSWEEnqueue(&swe_queue, scratch, new_swe);
-          }
+      // Only queue if the distance still needs to be calculated.
+      // Target has a distance of 0 so ignore it.
+      if ((cell->distance == 0) && 
+          ((adj_cell_coords.coords[adj_index].row != target.row) || 
+           (adj_cell_coords.coords[adj_index].col != target.col))) 
+      {
+        // Set wall distance to the largest representable value. 
+        // Otherwise update distance now queue up the next sample
+        // walk entry.
+        if (cell->type == MazeCellType_wall) {   
+          cell->distance = (1 << 12) - 1; 
+        } else {
+          cell->distance = swe.distance + 1;
+          queueMazeSWEEnqueue(&swe_queue, scratch, MazeSWE{
+            .distance = cell->distance,
+            .coords = adj_cell_coords.coords[adj_index]
+          });
         }
       }
     }
@@ -260,7 +262,7 @@ void mazeUpdateCellDistancesToTarget(
 }
 
 u64 getTimeMS() {
-  using namespace std::chrono;
+  using namespace std::chrono; 
   auto t = system_clock::now();
   auto since_epoch = t.time_since_epoch();
   return duration_cast<milliseconds>(since_epoch).count();
@@ -287,7 +289,7 @@ void drawCursor(u8 row, u8 col) {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    // TODO(caleb): Usage notes
+    printf("Usage: %s path_to_maze\n", argv[0]);
     return 0;
   }
   
@@ -299,7 +301,7 @@ int main(int argc, char** argv) {
 	cbreak();
 	keypad(stdscr, TRUE);
   curs_set(0); 
-  nodelay(stdscr, 1); // NOTE(caleb): Don't block on getch
+  nodelay(stdscr, 1);
 
   start_color();
   init_pair(MazeCellColor_queued, COLOR_MAGENTA, COLOR_BLACK);
@@ -341,42 +343,36 @@ int main(int argc, char** argv) {
     else if (getch() == KEY_DOWN) 
       ticks_per_second = max(1, ticks_per_second - 1);
 
-    // Tick speed
+    // Tick speed 
     u64 now = getTimeMS();
     if (now - last_time < 1000 / ticks_per_second) continue;
     last_time = now;
 
+    // Queue adj cells after reaching target pos.
     if ((cursor_pos.row == target_pos.row) && 
         (cursor_pos.col == target_pos.col)) 
     {
-      // Since cursor has reached target, mark cell as visited
-      MazeCell* curr_cell = mazeCellFromCoords(&m, 
-        cursor_pos.row, cursor_pos.col);
-      curr_cell->visited = 1; 
+      // Since cursor has reached target, mark cell as visited. 
+      // NOTE(caleb): "visited" field is ONLY used for coloring.
+      {
+        MazeCell* curr_cell = mazeCellFromCoords(&m, cursor_pos);
+        curr_cell->visited = 1; 
+      }
        
-      // Add unvisited neighbors
-      for (u8 dir_delta_index=0; dir_delta_index < 4; ++dir_delta_index) {
-        const i8 d_row = cardinal_dir_deltas[dir_delta_index][0];
-        const i8 d_col = cardinal_dir_deltas[dir_delta_index][1];
-        if (validMazeCoords(&m, (i8)cursor_pos.row + d_row, 
-          (i8)cursor_pos.col + d_col)) {
-          Coords pos_to_queue = Coords{
-            .row = (u8)(cursor_pos.row + d_row), 
-            .col = (u8)(cursor_pos.col + d_col)
-          };
-          MazeCell* cell = mazeCellFromCoords(&m, 
-            pos_to_queue.row, pos_to_queue.col); 
-          if (cell->queued != 1) {
-            if (cell->type != MazeCellType_wall)  {
-              queueCoordsEnqueue(&coords_q, 
-                &scratch_arena, pos_to_queue);
-              cell->queued = 1;
-            }
-          }
+      // Queue adj cells that haven't yet been queued (and aren't walls)
+      AdjCellCoords adj_cell_coords = mazeAdjCellCoords(&m, cursor_pos);
+      for (u8 adj_index=0; adj_index < adj_cell_coords.count; 
+           ++adj_index) {
+        MazeCell* cell = mazeCellFromCoords(&m, 
+          adj_cell_coords.coords[adj_index]);
+        if (cell->queued != 1 && cell->type != MazeCellType_wall) {
+          queueCoordsEnqueue(&coords_q, 
+            &scratch_arena, adj_cell_coords.coords[adj_index]);
+          cell->queued = 1;
         }
       }
 
-      // Pull a new target off of the queue and update distances.
+      // Pull a new target off queue and update distances.
       target_pos = queueCoordsDequeue(&coords_q);
       mazeUpdateCellDistancesToTarget(&scratch_arena, &m, target_pos);
     } 
@@ -385,44 +381,29 @@ int main(int argc, char** argv) {
     if ((cursor_pos.row != target_pos.row) || 
         (cursor_pos.col != target_pos.col)) 
     {
-      u8 nearest_cardinal_dir_delta_index;
+      u8 nearest_adj_index = 0;
       u16 nearest_distance = (1 << 12) - 1;
-      for (u8 dir_delta_index=0; 
-           dir_delta_index < 4; 
-           ++dir_delta_index) 
-      {
-        const i8 d_row = cardinal_dir_deltas[dir_delta_index][0];
-        const i8 d_col = cardinal_dir_deltas[dir_delta_index][1];
-        if (validMazeCoords(&m, (i8)cursor_pos.row + d_row, 
-          (i8)cursor_pos.col + d_col)) {
-          Coords adj_cell_pos = Coords{
-            .row = (u8)(cursor_pos.row + d_row), 
-            .col = (u8)(cursor_pos.col + d_col)
-          };
-          MazeCell* cell = mazeCellFromCoords(&m, 
-            adj_cell_pos.row, adj_cell_pos.col); 
-          if (cell->distance < nearest_distance) {
-            nearest_cardinal_dir_delta_index = dir_delta_index;
-            nearest_distance = cell->distance;
-          }
+
+      AdjCellCoords adj_cell_coords = mazeAdjCellCoords(&m, cursor_pos);
+      for (u8 adj_index=0; adj_index < adj_cell_coords.count; 
+           ++adj_index) {
+        MazeCell* cell = mazeCellFromCoords(&m, 
+          adj_cell_coords.coords[adj_index]);
+        if (cell->distance < nearest_distance) {
+          nearest_adj_index = adj_index;
+          nearest_distance = cell->distance;
         }
       }
-      cursor_pos.row += 
-        cardinal_dir_deltas[nearest_cardinal_dir_delta_index][0];
-      cursor_pos.col += 
-        cardinal_dir_deltas[nearest_cardinal_dir_delta_index][1];
+      cursor_pos = adj_cell_coords.coords[nearest_adj_index];
 
       // Check adjacent cells for goal
-      for (u8 dir_delta_index=0; dir_delta_index < 4; ++dir_delta_index) {
-        const i8 d_row = cardinal_dir_deltas[dir_delta_index][0];
-        const i8 d_col = cardinal_dir_deltas[dir_delta_index][1];
-        if (validMazeCoords(&m, (i8)cursor_pos.row + d_row, 
-          (i8)cursor_pos.col + d_col)) {
-          MazeCell* cell = mazeCellFromCoords(&m, 
-            cursor_pos.row + d_row, cursor_pos.col + d_col);
-          if (cell->type == MazeCellType_goal) 
-            done = true; 
-        }
+      adj_cell_coords = mazeAdjCellCoords(&m, cursor_pos);
+      for (u8 adj_index=0; adj_index < adj_cell_coords.count; 
+           ++adj_index) {
+        MazeCell* cell = mazeCellFromCoords(&m, 
+          adj_cell_coords.coords[adj_index]);
+        if (cell->type == MazeCellType_goal) 
+          done = true; 
       }
     }
 
