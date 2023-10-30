@@ -35,8 +35,8 @@ typedef double f64;
 #define KB(n) (n * 1024)
 #define MB(n) (KB(n) * 1024)
 
-#define max(a, b) (a > b ? a : b)
-#define min(a, b) (a < b ? a : b)
+#define Max(a, b) (a > b ? a : b)
+#define Min(a, b) (a < b ? a : b)
 
 struct Arena {
   u8* base_ptr;
@@ -47,7 +47,6 @@ struct Arena {
 struct ArenaState {
   u64 restore_offset;
 };
-
 
 void arenaFree(Arena *a);
 void arenaEnd(Arena* a, ArenaState s);
@@ -72,6 +71,8 @@ StringU8 stringU8FromFile(Arena* arena, FILE* in, const u64 max_read_bytes);
 
 bool isDigit(u8 ch); 
 bool isAlpha(u8 ch); 
+
+f64 getTimeMS();
 
 #define CABARGER_CS121_INCLUDE_H
 #endif

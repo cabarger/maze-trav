@@ -11,13 +11,14 @@
 //! Maze traversal program
 //!
 
-#include <chrono> 
-#include <stdio.h>
-#include <stdlib.h>
-#include <curses.h>
-
 #include "cabarger_cs121_include.h"
 #include "queue.h"
+
+#include <curses.h>
+#include <stdlib.h> 
+
+// Coords/MazeSWE queue prototype(s)/implementation(s). 
+// Via scuffed templates.
 
 struct Coords {
   u8 row;
@@ -27,8 +28,7 @@ struct Coords {
 QueuePrototype(Coords); 
 QueueImpl(Coords);
 
-/// Sample walk entry. Used within this programs pathfinding 
-/// algorithm. See "mazeUpdateCellDistancesToTarget"
+/// Sample walk entry. Relavent to pathfinding algorithm used.  
 struct MazeSWE { 
   u16 distance; 
   Coords coords; 
@@ -37,13 +37,7 @@ struct MazeSWE {
 QueuePrototype(MazeSWE);
 QueueImpl(MazeSWE);
 
-typedef u8 MazeCellChar;
-enum {
-  MazeCellChar_empty = '.',
-  MazeCellChar_wall = '#',
-  MazeCellChar_start = 'S',
-  MazeCellChar_goal = 'G',
-};
+////////////////////
 
 typedef u8 MazeCellType;
 enum {
@@ -53,15 +47,41 @@ enum {
   MazeCellType_goal,
 };
 
-typedef i32 MazeCellColor; 
+/// Accompanying char representations for the 4 cell types. 
+/// Only 2 bits per cell to encode all cell types.
+typedef u8 MazeCellChar;
 enum {
-  MazeCellColor_queued = 1,
-  MazeCellColor_visited,
-  MazeCellColor_start,
-  MazeCellColor_goal,
-  MazeCellColor_cursor,
+  MazeCellChar_empty = '.',
+  MazeCellChar_wall = '#',
+  MazeCellChar_start = 'S',
+  MazeCellChar_goal = 'G',
 };
 
+// MazeCellChar <=> MazeCellType conversions
+
+inline MazeCellType cellTypeFromChar(const MazeCellChar c) {
+  switch(c) {
+      case MazeCellChar_empty: return MazeCellType_empty;
+      case MazeCellChar_wall: return MazeCellType_wall; 
+      case MazeCellChar_start: return MazeCellType_start;
+      case MazeCellChar_goal: return MazeCellType_goal;
+      default: InvalidPath;
+  }
+  return 0; // NOTE(caleb): Shhhh -Wreturn-type 
+}
+
+inline MazeCellChar cellCharFromType(const MazeCellType t) {
+  switch(t) {
+      case MazeCellType_empty: return MazeCellChar_empty;
+      case MazeCellType_wall: return  MazeCellChar_wall; 
+      case MazeCellType_start: return MazeCellChar_start;
+      case MazeCellType_goal: return  MazeCellChar_goal;
+      default: InvalidPath;
+  }
+  return 0; // NOTE(caleb): Shhhh -Wreturn-type 
+}
+
+/// 2 byte bitfield encoding a cell. 
 struct MazeCell {
   u16 queued : 1; 
   u16 visited : 1;
@@ -81,29 +101,21 @@ struct AdjCellCoords {
   u8 count;  
 };
 
-inline MazeCellType mazeCellTypeFromChar(const MazeCellChar c) {
-  switch(c) {
-      case MazeCellChar_empty: return MazeCellType_empty;
-      case MazeCellChar_wall: return MazeCellType_wall; 
-      case MazeCellChar_start: return MazeCellType_start;
-      case MazeCellChar_goal: return MazeCellType_goal;
-      default: InvalidPath;
-  }
-  return 0; // NOTE(caleb): Shhhh -Wreturn-type 
-}
+/// Various forground/background pair ids for cell coloring.
+typedef i32 MazeCellColor; 
+enum {
+  MazeCellColor_queued = 1,
+  MazeCellColor_visited,
+  MazeCellColor_start,
+  MazeCellColor_goal,
+  MazeCellColor_cursor,
+};
 
-inline MazeCellChar mazeCellCharFromType(const MazeCellType t) {
-  switch(t) {
-      case MazeCellType_empty: return MazeCellChar_empty;
-      case MazeCellType_wall: return  MazeCellChar_wall; 
-      case MazeCellType_start: return MazeCellChar_start;
-      case MazeCellType_goal: return  MazeCellChar_goal;
-      default: InvalidPath;
-  }
-  return 0; // NOTE(caleb): Shhhh -Wreturn-type 
-}
+////////////////////
 
-inline bool validMazeCoords(Maze* m, i8 row, i8 col) {
+// Maze operations
+
+inline bool mazeBoundsCheck(Maze* m, i8 row, i8 col) {
   return ((row >= 0 && row < m->rows) && 
           (col >= 0 && col < m->cols)); 
 }
@@ -132,7 +144,7 @@ AdjCellCoords mazeAdjCellCoords(Maze* m, Coords pos) {
   for (u8 dir_delta_index=0; dir_delta_index < 4; ++dir_delta_index) {
     const i8 d_row = dir_deltas[dir_delta_index][0];
     const i8 d_col = dir_deltas[dir_delta_index][1];
-    if (validMazeCoords(m, (i8)pos.row + d_row, 
+    if (mazeBoundsCheck(m, (i8)pos.row + d_row, 
         (i8)pos.col + d_col)) {
       result.coords[result.count++] = Coords{
         .row = (u8)(pos.row + d_row), 
@@ -162,7 +174,7 @@ Maze mazeFromStringU8(Arena* arena, StringU8 maze_str) {
         const u8 row = maze_cell_index / result.cols; 
         const u8 col = maze_cell_index % result.cols;
         result.data[(u16)row * result.cols + col].type =
-           mazeCellTypeFromChar(c);
+           cellTypeFromChar(c);
 
         if (c == MazeCellChar_start) 
           result.start_index = maze_cell_index;
@@ -215,8 +227,8 @@ Maze mazeFromStringU8(Arena* arena, StringU8 maze_str) {
 }
 
 void mazeUpdateCellDistancesToTarget(
-  Arena* scratch, 
   Maze* m, 
+  Arena* scratch, 
   Coords target
 ) {
   ArenaState scratch_restore = arenaBegin(scratch);
@@ -261,12 +273,9 @@ void mazeUpdateCellDistancesToTarget(
   arenaEnd(scratch, scratch_restore);
 }
 
-u64 getTimeMS() {
-  using namespace std::chrono; 
-  auto t = system_clock::now();
-  auto since_epoch = t.time_since_epoch();
-  return duration_cast<milliseconds>(since_epoch).count();
-}
+////////////////////
+
+// Drawing primitives
 
 void drawCell(const MazeCell* cell, u8 row, u8 col) {
   if (cell->type == MazeCellType_goal)
@@ -277,7 +286,7 @@ void drawCell(const MazeCell* cell, u8 row, u8 col) {
     attron(COLOR_PAIR(MazeCellColor_visited));
   if (cell->type == MazeCellType_start)
     attron(COLOR_PAIR(MazeCellColor_start));
-	mvaddch(row, col, mazeCellCharFromType(cell->type));
+	mvaddch(row, col, cellCharFromType(cell->type));
   attroff(A_COLOR);
 }
 
@@ -286,6 +295,8 @@ void drawCursor(u8 row, u8 col) {
 	mvaddch(row, col, '@'); 
   attroff(A_COLOR);
 }
+
+////////////////////
 
 int main(int argc, char** argv) {
   if (argc < 2) {
@@ -333,19 +344,19 @@ int main(int argc, char** argv) {
   };
   Coords target_pos = cursor_pos;
 
-  u8 ticks_per_second = 10;
-  u64 last_time = getTimeMS();
+  f32 ticks_per_second = 10.0;
+  f64 last_time = getTimeMS();
 
   bool done = false;
   while (!done) {
     if (getch() == KEY_UP) 
-      ticks_per_second = min(60, ticks_per_second + 1);
+      ticks_per_second = Min(60.0, ticks_per_second + 1.0);
     else if (getch() == KEY_DOWN) 
-      ticks_per_second = max(1, ticks_per_second - 1);
+      ticks_per_second = Max(1.0, ticks_per_second - 1.0);
 
     // Tick speed 
-    u64 now = getTimeMS();
-    if (now - last_time < 1000 / ticks_per_second) continue;
+    f64 now = getTimeMS();
+    if (now - last_time < 1000.0 / ticks_per_second) continue;
     last_time = now;
 
     // Queue adj cells after reaching target pos.
@@ -374,7 +385,7 @@ int main(int argc, char** argv) {
 
       // Pull a new target off queue and update distances.
       target_pos = queueCoordsDequeue(&coords_q);
-      mazeUpdateCellDistancesToTarget(&scratch_arena, &m, target_pos);
+      mazeUpdateCellDistancesToTarget(&m, &scratch_arena, target_pos);
     } 
 
     // Either en'route to target or target_pos was just updated.

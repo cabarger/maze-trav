@@ -15,6 +15,7 @@
 #include "stdlib.h"
 #include <string.h> // memcmp
 #include <stdio.h> // FILE*
+#include <time.h> 
 
 void* arenaAllocInner(Arena* a, const u64 requested_space) {
   if (a->offset + requested_space > a->cap) 
@@ -69,4 +70,8 @@ bool isDigit(u8 ch) {
 bool isAlpha(u8 ch) {
     return ((ch >= 'a' && ch <= 'z') || 
             (ch >= 'A' && ch <= 'Z'));
+}
+
+f64 getTimeMS() {
+  return ((f64)clock() / CLOCKS_PER_SEC) * 1000.0;
 }
